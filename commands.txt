@@ -86,10 +86,6 @@ sudo docker run \
     --env FLINK_PROPERTIES="${FLINK_PROPERTIES}" \
     flink:1.13.0-scala_2.11 taskmanager
 
-
-
-
-
 # To submit flink job
 sudo docker-compose exec jobmanager ./bin/flink run -py ~/pyflink-nlp/pipeline.py
 sudo docker-compose exec jobmanager ./bin/flink run \
