@@ -1,0 +1,105 @@
+# Install python3-venv and activate it
+sudo apt install python3-venv -y
+python3 -m venv venv
+. ./venv/bin/activate
+
+# Dependencies
+sudo apt install libpq-dev python-dev gcc build-essential libssl-dev libffi-dev python3-dev psycopg2 openjdk-8-jre -y
+
+# Create dir for Kafka, download it and extract
+wget -P ./kafka https://mirror.linux-ia64.org/apache/kafka/2.8.0/kafka_2.13-2.8.0.tgz
+tar -xf ./kafka/kafka_2.13-2.8.0.tgz -C ./kafka/
+
+# Start Zookeeper daemon
+./kafka/kafka_2.13-2.8.0/bin/zookeeper-server-start.sh -daemon ./kafka/kafka_2.13-2.8.0/config/zookeeper.properties
+
+# Start Kafka broker daemon
+./kafka/kafka_2.13-2.8.0/bin/kafka-server-start.sh -daemon ./kafka/kafka_2.13-2.8.0/config/server.properties
+
+# Create Kafka topic 
+./kafka/kafka_2.13-2.8.0/bin/kafka-topics.sh --create  --topic test --zookeeper localhost:2181 --partitions 1 --replication-factor 1
+
+# create dir for postgres volume
+mkdir Postgres
+
+# run Docker postgres
+sudo docker run --name postgres_db \
+	--detach \
+	--rm \
+	-v ./postgres \
+	-e POSTGRES_USER=postgres \
+	-e POSTGRES_PASSWORD=password \
+	-e POSTGRES_DB=postgres -d -p 5432:5432 postgres
+
+# enter postgres docker container and Postgres, create custom schema and table, also trgm extension
+sudo docker exec -it postgres_db bash
+psql -U postgres
+CREATE SCHEMA the_database;
+CREATE TABLE the_database.the_table(
+	id serial PRIMARY KEY,
+	word varchar(50) UNIQUE
+);
+CREATE EXTENSION pg_trgm;
+
+# Install Flask, run Flask server in debug mode listenin on :5000
+pip install Flask
+export FLASK_ENV=development
+python -m flask run --host=0.0.0.0
+
+# run python3 code
+python3 ./pythoncode/to_kafka.py
+python3 ./pythoncode/from_kafka.py
+
+
+# Connect to Kafka console consumer(aka listen to topic)
+./kafka/kafka_2.13-2.8.0/bin/kafka-console-consumer.sh --topic test --bootstrap-server localhost:9092
+
+# Start Kafka  producer
+./kafka/kafka_2.13-2.8.0/bin/kafka-console-producer.sh --topic test --broker-list localhost:9092
+
+
+# Must be used in all individual terminals. Setting variable.
+FLINK_PROPERTIES="jobmanager.rpc.address: jobmanager"
+
+# Creating a docker network to connect Flink containers
+sudo docker network create flink-network
+
+# Launch Flink JobManager
+FLINK_PROPERTIES="jobmanager.rpc.address: jobmanager"
+sudo docker run \
+	--detach \
+	--rm \
+	--name=jobmanager \
+	--network flink-network \
+	--publish 8081:8081 \
+	--env FLINK_PROPERTIES="${FLINK_PROPERTIES}" \
+	flink:1.13.0-scala_2.11 jobmanager
+
+
+# Launch Flink TaskManager	
+FLINK_PROPERTIES="jobmanager.rpc.address: jobmanager"
+sudo docker run \
+	--detach \
+    --rm \
+    --name=taskmanager \
+    --network flink-network \
+    --env FLINK_PROPERTIES="${FLINK_PROPERTIES}" \
+    flink:1.13.0-scala_2.11 taskmanager
+
+
+
+
+
+# To submit flink job
+sudo docker-compose exec jobmanager ./bin/flink run -py ~/pyflink-nlp/pipeline.py
+sudo docker-compose exec jobmanager ./bin/flink run \
+      --python ~/pyflink-nlp/pipeline2.py
+	  
+sudo docker-compose exec jobmanager ./bin/flink run \
+      --python ~/pyflink-nlp/test.py
+
+# Delete Kafka topic Kafka broker daemon Zookeeper daemon
+./kafka/kafka_2.13-2.8.0/bin/kafka-topics.sh --delete  --topic test --zookeeper localhost:2181
+./kafka/kafka_2.13-2.8.0/bin/kafka-server-stop.sh -daemon ./kafka/kafka_2.13-2.8.0/config/server.properties
+./kafka/kafka_2.13-2.8.0/bin/zookeeper-server-stop.sh -daemon ./kafka/kafka_2.13-2.8.0/config/zookeeper.properties
+sudo docker stop postgres_db
